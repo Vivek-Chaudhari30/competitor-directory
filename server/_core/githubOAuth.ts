@@ -78,9 +78,10 @@ export function registerGitHubOAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
       res.redirect(302, "/");
-    } catch (error) {
-      console.error("[GitHub OAuth] Callback failed:", error);
-      res.status(500).send("GitHub login failed");
+    } catch (error: any) {
+      const msg = error?.response?.data ?? error?.message ?? String(error);
+      console.error("[GitHub OAuth] Callback failed:", msg);
+      res.status(500).send(`GitHub login failed: ${JSON.stringify(msg)}`);
     }
   });
 }

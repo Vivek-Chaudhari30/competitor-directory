@@ -109,5 +109,9 @@ temp/
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
 
+# Claude worktrees
+.claude/worktrees/
+setup-railway-env.sh
+
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser, users,
@@ -9,8 +9,6 @@ import {
   people, Person, InsertPerson,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
-import fs from "fs";
-import path from "path";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -28,64 +26,86 @@ export async function getDb() {
 }
 
 // ─── Auto-migration on startup ────────────────────────────────────────────────
-// Runs every pending SQL migration file in drizzle/ in filename order.
-// Uses a simple `__migrations` table to track what's already been applied.
+// Inline migrations — no file I/O so this works reliably inside Railway's container.
+// Each step is idempotent: errors for "already exists / duplicate column" are swallowed.
+
+async function runSql(db: ReturnType<typeof drizzle>, statement: string): Promise<void> {
+  try {
+    await db.execute(sql.raw(statement));
+  } catch (err: any) {
+    const msg: string = err?.message ?? "";
+    // Ignore "already exists" and "duplicate column" errors — statement is idempotent
+    if (
+      msg.includes("already exists") ||
+      msg.includes("Duplicate column") ||
+      msg.includes("ER_DUP_FIELDNAME") ||
+      msg.includes("ER_TABLE_EXISTS_ERROR")
+    ) {
+      return;
+    }
+    throw err;
+  }
+}
 
 export async function runMigrations(): Promise<void> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Migrations] No database — skipping migrations");
+    console.warn("[Migrations] No database — skipping");
     return;
   }
 
   try {
-    // Ensure tracking table exists
-    await db.execute(`
-      CREATE TABLE IF NOT EXISTS __migrations (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        filename VARCHAR(255) NOT NULL UNIQUE,
-        appliedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    console.log("[Migrations] Running startup migrations…");
+
+    // ── 0001: companies table + emailNotificationsEnabled (already applied on existing DBs,
+    //          but safe to re-run thanks to IF NOT EXISTS / idempotent runSql)
+    await runSql(db, `
+      CREATE TABLE IF NOT EXISTS companies (
+        id varchar(64) NOT NULL,
+        name varchar(255) NOT NULL,
+        category enum('ai-context','gtm-sales','a16z') NOT NULL DEFAULT 'ai-context',
+        description text,
+        website varchar(500),
+        linkedin varchar(500) NOT NULL,
+        twitter varchar(500),
+        isActive boolean NOT NULL DEFAULT true,
+        createdAt timestamp NOT NULL DEFAULT (now()),
+        updatedAt timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT companies_id PRIMARY KEY (id)
+      )
+    `);
+    await runSql(db, `ALTER TABLE users ADD COLUMN emailNotificationsEnabled boolean NOT NULL DEFAULT true`);
+
+    // ── 0002: people table + engagement columns on competitor_posts
+    await runSql(db, `
+      CREATE TABLE IF NOT EXISTS people (
+        id varchar(64) NOT NULL,
+        name varchar(255) NOT NULL,
+        title varchar(255),
+        company varchar(255),
+        linkedin varchar(500) NOT NULL,
+        twitter varchar(500),
+        notes text,
+        isActive boolean NOT NULL DEFAULT true,
+        createdAt timestamp NOT NULL DEFAULT (now()),
+        updatedAt timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT people_id PRIMARY KEY (id)
       )
     `);
 
-    // Read all .sql files from drizzle/ folder, sorted by name
-    const migrationsDir = path.resolve(process.cwd(), "drizzle");
-    const files = fs
-      .readdirSync(migrationsDir)
-      .filter(f => f.endsWith(".sql"))
-      .sort();
+    // Make companyId nullable (was NOT NULL)
+    await runSql(db, `ALTER TABLE competitor_posts MODIFY COLUMN companyId varchar(64) DEFAULT NULL`);
 
-    for (const file of files) {
-      // Check if already applied
-      const rows: any[] = await db.execute(
-        `SELECT id FROM __migrations WHERE filename = '${file}'`
-      ) as any;
-      const already = Array.isArray(rows[0]) ? rows[0].length > 0 : false;
-      if (already) continue;
+    // New columns on competitor_posts — each individually so partial failures don't block the rest
+    await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN personId varchar(64) DEFAULT NULL AFTER companyId`);
+    await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN sourceType enum('company','person') NOT NULL DEFAULT 'company' AFTER personId`);
+    await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN likeCount int DEFAULT NULL`);
+    await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN commentCount int DEFAULT NULL`);
+    await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN shareCount int DEFAULT NULL`);
 
-      console.log(`[Migrations] Applying ${file}…`);
-      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
-
-      // Split on Drizzle's statement-breakpoint marker OR semicolons
-      const statements = sql
-        .split(/-->.*statement-breakpoint|;/)
-        .map(s => s.replace(/--[^\n]*/g, "").trim())
-        .filter(Boolean);
-
-      for (const stmt of statements) {
-        await db.execute(stmt);
-      }
-
-      await db.execute(
-        `INSERT IGNORE INTO __migrations (filename) VALUES ('${file}')`
-      );
-      console.log(`[Migrations] ✓ ${file}`);
-    }
-
-    console.log("[Migrations] All migrations up to date");
+    console.log("[Migrations] ✓ All migrations applied");
   } catch (error) {
-    console.error("[Migrations] Migration failed:", error);
-    // Don't crash the server — log and continue
+    console.error("[Migrations] Migration error (server will continue):", error);
   }
 }
 
@@ -264,7 +284,9 @@ export async function getRecentCompetitorPosts(_hours?: number): Promise<Competi
   try {
     const { desc } = await import("drizzle-orm");
     // Return ALL stored posts ordered by postedAt desc — no time filter ever.
-    return db.select().from(competitorPosts).orderBy(desc(competitorPosts.postedAt));
+    // `return await` (not just `return`) is required so the catch block actually
+    // catches DB errors instead of forwarding a rejected promise to the caller.
+    return await db.select().from(competitorPosts).orderBy(desc(competitorPosts.postedAt));
   } catch (error) {
     console.error("[Database] Failed to get competitor posts:", error);
     return [];

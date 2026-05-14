@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, competitorPosts, notifications, taskLogs, CompetitorPost, InsertCompetitorPost, Notification, InsertNotification, TaskLog, InsertTaskLog } from "../drizzle/schema";
+import { InsertUser, users, competitorPosts, notifications, taskLogs, companies, CompetitorPost, InsertCompetitorPost, Notification, InsertNotification, TaskLog, InsertTaskLog, InsertCompany, Company } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -174,5 +174,62 @@ export async function updateTaskLog(taskLogId: number, updates: Partial<TaskLog>
     await db.update(taskLogs).set(updates).where(eq(taskLogs.id, taskLogId));
   } catch (error) {
     console.error("[Database] Failed to update task log:", error);
+  }
+}
+
+// ─── User settings ────────────────────────────────────────────────────────────
+
+export async function updateUserSettings(openId: string, settings: { emailNotificationsEnabled?: boolean }): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set(settings).where(eq(users.openId, openId));
+}
+
+export async function getUsersWithEmailEnabled(): Promise<typeof users.$inferSelect[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(users).where(eq(users.emailNotificationsEnabled, true));
+}
+
+// ─── Companies CRUD ───────────────────────────────────────────────────────────
+
+export async function getCompanies(): Promise<Company[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(companies).where(eq(companies.isActive, true));
+}
+
+export async function addCompany(data: InsertCompany): Promise<Company | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    await db.insert(companies).values(data);
+    const result = await db.select().from(companies).where(eq(companies.id, data.id)).limit(1);
+    return result[0] ?? null;
+  } catch (error) {
+    console.error("[Database] Failed to add company:", error);
+    return null;
+  }
+}
+
+export async function updateCompany(id: string, data: Partial<InsertCompany>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(companies).set(data).where(eq(companies.id, id));
+}
+
+export async function deleteCompany(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(companies).set({ isActive: false }).where(eq(companies.id, id));
+}
+
+export async function seedCompaniesIfEmpty(seedData: InsertCompany[]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db.select().from(companies).limit(1);
+  if (existing.length > 0) return;
+  for (const company of seedData) {
+    await db.insert(companies).values(company).onDuplicateKeyUpdate({ set: { name: company.name } });
   }
 }

@@ -1,8 +1,8 @@
 import axios from "axios";
-import { COMPETITORS, Company } from "../../shared/const";
-import { addCompetitorPost, createTaskLog, updateTaskLog, createNotification, getUserByOpenId } from "../db";
-import { notifyOwner } from "../_core/notification";
+import { getCompanies, addCompetitorPost, createTaskLog, updateTaskLog, getUsersWithEmailEnabled } from "../db";
+import { sendDailyDigestEmail } from "./emailService";
 import { ENV } from "../_core/env";
+import type { Company } from "../../drizzle/schema";
 
 // ─── Apify helpers ────────────────────────────────────────────────────────────
 
@@ -36,8 +36,8 @@ function extractLinkedInCompanySlug(url: string): string {
   return url.replace(/\/$/, "").split("/").pop() ?? url;
 }
 
-async function fetchLinkedInPosts() {
-  const linkedinUrls = COMPETITORS.map(c => c.linkedin);
+async function fetchLinkedInPosts(trackedCompanies: Company[]) {
+  const linkedinUrls = trackedCompanies.map(c => c.linkedin);
 
   const items = await runApifyActor("harvestapi/linkedin-company-posts", {
     targetUrls: linkedinUrls,
@@ -54,7 +54,7 @@ async function fetchLinkedInPosts() {
     const cleanedAuthorUrl = rawAuthorUrl.replace(/\/posts\/?$/, "");
     const itemSlug = extractLinkedInCompanySlug(cleanedAuthorUrl);
 
-    const company = COMPETITORS.find(c =>
+    const company = trackedCompanies.find(c =>
       extractLinkedInCompanySlug(c.linkedin) === itemSlug ||
       c.linkedin.includes(itemSlug)
     );
@@ -108,9 +108,13 @@ export async function runCompetitorMonitoringJob() {
       console.warn(`[${taskName}] No database — task log skipped, continuing job`);
     }
 
+    // Load companies from DB
+    const trackedCompanies = await getCompanies();
+    console.log(`[${taskName}] Tracking ${trackedCompanies.length} companies`);
+
     // Fetch LinkedIn and Twitter posts in parallel
     const [linkedinPosts, twitterPosts] = await Promise.all([
-      fetchLinkedInPosts(),
+      fetchLinkedInPosts(trackedCompanies),
       fetchTwitterPosts(),
     ]);
 
@@ -126,32 +130,24 @@ export async function runCompetitorMonitoringJob() {
     const postsAdded = insertedPostIds.length;
     console.log(`[${taskName}] Successfully added ${postsAdded} new posts to database`);
 
-    const owner = await getUserByOpenId(ENV.ownerOpenId);
+    if (postsAdded > 0) {
+      const recentPosts = allPosts.filter((_, i) => insertedPostIds.length > 0);
+      const subscribers = await getUsersWithEmailEnabled();
+      let emailsSentCount = 0;
 
-    if (owner && postsAdded > 0) {
-      let notificationsCreated = 0;
-      for (const postId of insertedPostIds) {
-        const notification = await createNotification({
-          userId: owner.id,
-          postId,
-          emailStatus: "pending",
-        });
-        if (notification) notificationsCreated++;
+      for (const subscriber of subscribers) {
+        if (!subscriber.email) continue;
+        const sent = await sendDailyDigestEmail(subscriber.email, subscriber.name ?? "", recentPosts as any);
+        if (sent) emailsSentCount++;
       }
 
-      console.log(`[${taskName}] Created ${notificationsCreated} notifications`);
-
-      await notifyOwner({
-        title: "Daily Competitor Monitoring Complete",
-        content: `Found ${postsAdded} new posts from ${COMPETITORS.length} competitors (${linkedinPosts.length} LinkedIn, ${twitterPosts.length} Twitter).`,
-      });
+      console.log(`[${taskName}] Sent digest emails to ${emailsSentCount}/${subscribers.length} subscribers`);
     }
 
     if (taskLog) {
       await updateTaskLog(taskLog.id, {
         status: "success",
         postsFound: postsAdded,
-        emailsSent: postsAdded,
         completedAt: new Date(),
       });
     }
@@ -168,10 +164,7 @@ export async function runCompetitorMonitoringJob() {
       completedAt: new Date(),
     });
 
-    await notifyOwner({
-      title: "Daily Competitor Monitoring Failed",
-      content: `Error: ${String(error)}`,
-    });
+    console.error(`[${taskName}] Monitoring failed:`, error);
   }
 }
 

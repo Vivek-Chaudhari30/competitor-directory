@@ -10,10 +10,11 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { scheduledCompetitorMonitoringHandler } from "../handlers/scheduledCompetitorMonitoring";
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS, COMPETITORS } from "@shared/const";
 import { sdk } from "./sdk";
 import { getSessionCookieOptions } from "./cookies";
 import { ENV } from "./env";
+import { seedCompaniesIfEmpty } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -85,6 +86,18 @@ async function startServer() {
   if (port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
+
+  // Seed companies from static list if DB table is empty
+  seedCompaniesIfEmpty(COMPETITORS.map(c => ({
+    id: c.id,
+    name: c.name,
+    category: c.category,
+    description: c.description ?? null,
+    website: c.website ?? null,
+    linkedin: c.linkedin,
+    twitter: c.twitter ?? null,
+    isActive: true,
+  }))).catch(e => console.warn("[Seed] Failed to seed companies:", e));
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);

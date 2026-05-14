@@ -8,6 +8,13 @@
       "when": 1778536014852,
       "tag": "0000_watery_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1778768147610,
+      "tag": "0001_handy_risque",
+      "breakpoints": true
     }
   ]
 }

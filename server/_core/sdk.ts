@@ -289,6 +289,7 @@ class SDKServer {
         email: "dev@localhost",
         loginMethod: "dev",
         role: "admin" as const,
+        emailNotificationsEnabled: true,
         createdAt: now,
         updatedAt: now,
         lastSignedIn: now,

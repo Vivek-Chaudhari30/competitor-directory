@@ -12,4 +12,6 @@ export const ENV = {
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
   githubCallbackUrl: process.env.GITHUB_CALLBACK_URL ?? "http://localhost:3000/api/auth/github/callback",
   cronSecret: process.env.CRON_SECRET ?? "",
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  appUrl: process.env.APP_URL ?? "https://competitor-directory-production.up.railway.app",
 };

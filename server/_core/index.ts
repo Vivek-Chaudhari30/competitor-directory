@@ -61,19 +61,6 @@ async function startServer() {
     });
   }
 
-  // Temporary debug endpoint — remove after fixing DB connection
-  app.get("/api/debug/db", async (_req, res) => {
-    try {
-      const { getDb } = await import("../db");
-      const db = await getDb();
-      if (!db) return res.json({ status: "no_db", DATABASE_URL: !!process.env.DATABASE_URL });
-      const result = await db.execute("SELECT 1 as ok");
-      res.json({ status: "ok", result: result[0] });
-    } catch (e: any) {
-      res.status(500).json({ status: "error", message: e?.message, cause: e?.cause?.message, code: e?.code });
-    }
-  });
-
   // Scheduled task handlers (must be before tRPC)
   app.post("/api/scheduled/competitor-monitoring", scheduledCompetitorMonitoringHandler);
 

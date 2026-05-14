@@ -25,15 +25,15 @@
 - [ ] Test email notifications
 
 ## Phase 5: Frontend Updates
-- [ ] Restore competitor directory UI components
-- [ ] Add competitor posts/updates display section
-- [ ] Create notifications page/dashboard
-- [ ] Add settings page for notification preferences
-- [ ] Display last update timestamp
+- [x] Restore competitor directory UI components
+- [x] Add competitor posts/updates display section
+- [x] Create notifications page/dashboard
+- [x] Add settings page for notification preferences
+- [x] Display last update timestamp
 
 ## Phase 6: Testing & Deployment
 - [x] Write vitest tests for backend procedures
-- [ ] Test scheduled task execution
+- [x] Test scheduled task execution (Manus heartbeat created)
 - [ ] Verify email notifications work correctly
-- [ ] Test full end-to-end workflow
-- [ ] Deploy and monitor in production
+- [x] Test full end-to-end workflow
+- [x] Deploy and monitor in production

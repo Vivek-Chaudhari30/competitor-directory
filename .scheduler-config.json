@@ -1,0 +1,11 @@
+{
+  "dailyCompetitorMonitoring": {
+    "taskUid": "VLd5PoymimWnZWyqLeb5pB",
+    "name": "daily-competitor-monitoring",
+    "cron": "0 0 9 * * *",
+    "path": "/api/scheduled/competitor-monitoring",
+    "description": "Daily competitor monitoring - fetches posts from LinkedIn and Twitter",
+    "nextExecutionAt": "2026-05-14T09:00:00Z",
+    "createdAt": "2026-05-11T21:52:00Z"
+  }
+}

@@ -74,7 +74,9 @@ export const appRouter = router({
 
   competitors: router({
     getRecentPosts: protectedProcedure.query(async () => {
-      return getRecentCompetitorPosts(24 * 30); // last 30 days
+      // Returns every post ever collected, ordered by postedAt desc.
+      // The DB is the source of truth — no time window applied.
+      return getRecentCompetitorPosts();
     }),
 
     runMonitoringJob: protectedProcedure.mutation(async ({ ctx }) => {

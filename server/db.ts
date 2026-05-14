@@ -98,25 +98,32 @@ export async function addCompetitorPost(post: InsertCompetitorPost): Promise<Com
     const result = await db.insert(competitorPosts).values(post);
     const inserted = await db.select().from(competitorPosts).where(eq(competitorPosts.id, Number(result[0].insertId))).limit(1);
     return inserted.length > 0 ? inserted[0] : null;
-  } catch (error) {
+  } catch (error: any) {
+    // Duplicate postId = post already stored from a previous run. This is expected — skip silently.
+    if (error?.code === 'ER_DUP_ENTRY' || error?.message?.includes('Duplicate entry')) {
+      return null;
+    }
     console.error("[Database] Failed to add competitor post:", error);
     return null;
   }
 }
 
-export async function getRecentCompetitorPosts(hours: number = 24): Promise<CompetitorPost[]> {
+export async function getRecentCompetitorPosts(_hours?: number): Promise<CompetitorPost[]> {
   const db = await getDb();
   if (!db) return [];
 
   try {
-    const { gt } = await import('drizzle-orm');
-    const cutoffTime = new Date(Date.now() - hours * 60 * 60 * 1000);
-    const result = await db.select().from(competitorPosts).where(
-      gt(competitorPosts.fetchedAt, cutoffTime)
-    );
+    const { desc } = await import('drizzle-orm');
+    // Return ALL stored posts ordered by post date descending.
+    // No time filter — every post ever fetched is kept in the DB and always visible.
+    // _hours param is kept for backward compat but intentionally ignored.
+    const result = await db
+      .select()
+      .from(competitorPosts)
+      .orderBy(desc(competitorPosts.postedAt));
     return result;
   } catch (error) {
-    console.error("[Database] Failed to get recent posts:", error);
+    console.error("[Database] Failed to get competitor posts:", error);
     return [];
   }
 }

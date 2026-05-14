@@ -29,19 +29,22 @@ export async function getDb() {
 // Inline migrations — no file I/O so this works reliably inside Railway's container.
 // Each step is idempotent: errors for "already exists / duplicate column" are swallowed.
 
+// Drizzle wraps MySQL errors: the MySQL error code is on err.code or err.cause.code,
+// NOT in err.message (which just says "Failed query: ...").
+const IDEMPOTENT_CODES = new Set([
+  "ER_DUP_FIELDNAME",      // column already exists
+  "ER_TABLE_EXISTS_ERROR", // table already exists
+  "ER_DUP_KEYNAME",        // index already exists
+]);
+
 async function runSql(db: ReturnType<typeof drizzle>, statement: string): Promise<void> {
   try {
     await db.execute(sql.raw(statement));
   } catch (err: any) {
-    const msg: string = err?.message ?? "";
-    // Ignore "already exists" and "duplicate column" errors — statement is idempotent
-    if (
-      msg.includes("already exists") ||
-      msg.includes("Duplicate column") ||
-      msg.includes("ER_DUP_FIELDNAME") ||
-      msg.includes("ER_TABLE_EXISTS_ERROR")
-    ) {
-      return;
+    const code: string = err?.code ?? err?.cause?.code ?? "";
+    const msg: string = (err?.message ?? "") + (err?.cause?.sqlMessage ?? "");
+    if (IDEMPOTENT_CODES.has(code) || msg.includes("Duplicate column") || msg.includes("already exists")) {
+      return; // already applied — safe to skip
     }
     throw err;
   }

@@ -42,14 +42,18 @@ async function fetchLinkedInPosts() {
   const items = await runApifyActor("harvestapi/linkedin-company-posts", {
     targetUrls: linkedinUrls,
     maxPosts: 5,
-    postedLimit: "24h",
+    postedLimit: "week",
     scrapeReactions: false,
     scrapeComments: false,
   });
 
   return items.flatMap(item => {
-    // Match result back to a company by comparing slugs in the URL
-    const itemSlug = extractLinkedInCompanySlug(item.authorUrl ?? item.companyUrl ?? "");
+    // author.linkedinUrl looks like "https://www.linkedin.com/company/gleanwork/posts"
+    // strip trailing /posts before extracting the slug
+    const rawAuthorUrl: string = item.author?.linkedinUrl ?? item.authorUrl ?? item.companyUrl ?? "";
+    const cleanedAuthorUrl = rawAuthorUrl.replace(/\/posts\/?$/, "");
+    const itemSlug = extractLinkedInCompanySlug(cleanedAuthorUrl);
+
     const company = COMPETITORS.find(c =>
       extractLinkedInCompanySlug(c.linkedin) === itemSlug ||
       c.linkedin.includes(itemSlug)
@@ -57,16 +61,18 @@ async function fetchLinkedInPosts() {
 
     if (!company) return [];
 
+    const postUrl: string = item.linkedinUrl ?? item.postUrl ?? item.url ?? company.linkedin;
+    const postedAtRaw = item.postedAt?.date ?? item.postedAt ?? item.publishedAt ?? item.date;
+
     return [{
       companyId: company.id,
       platform: "linkedin" as const,
-      // Use the real post URL as a stable dedup key
-      postId: `linkedin-${item.id ?? item.activityId ?? item.postUrl ?? item.url}`,
-      content: item.text ?? item.content ?? "",
+      postId: `linkedin-${item.id ?? item.activityId ?? postUrl}`,
+      content: item.content ?? item.text ?? "",
       authorName: item.author?.name ?? item.authorName ?? company.name,
-      authorUrl: item.author?.url ?? item.authorUrl ?? company.linkedin,
-      postUrl: item.postUrl ?? item.url ?? company.linkedin,
-      postedAt: new Date(item.postedAt ?? item.publishedAt ?? item.date ?? Date.now()),
+      authorUrl: cleanedAuthorUrl || company.linkedin,
+      postUrl,
+      postedAt: new Date(postedAtRaw ?? Date.now()),
     }];
   });
 }
@@ -78,34 +84,9 @@ function twitterHandleFromUrl(url: string): string {
 }
 
 async function fetchTwitterPosts() {
-  const handles = COMPETITORS.map(c => twitterHandleFromUrl(c.twitter)).filter(Boolean);
-
-  const items = await runApifyActor("pear_fight/twitter-scraper", {
-    usernames: handles,
-    maxTweets: 5,
-    proxyConfig: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-  });
-
-  return items.flatMap(item => {
-    const handle = (item.user?.screen_name ?? item.username ?? "").toLowerCase();
-    const company = COMPETITORS.find(c =>
-      twitterHandleFromUrl(c.twitter).toLowerCase() === handle
-    );
-
-    if (!company) return [];
-
-    const tweetId = item.id ?? item.id_str;
-    return [{
-      companyId: company.id,
-      platform: "twitter" as const,
-      postId: `twitter-${tweetId}`,
-      content: item.text ?? item.full_text ?? "",
-      authorName: item.user?.name ?? handle ?? company.name,
-      authorUrl: `https://x.com/${handle}`,
-      postUrl: item.url ?? (tweetId ? `https://x.com/${handle}/status/${tweetId}` : company.twitter),
-      postedAt: new Date(item.created_at ?? item.createdAt ?? Date.now()),
-    }];
-  });
+  // Twitter/X blocks Apify free-tier proxies — skip to avoid wasting time/credits
+  console.log("[Twitter] Skipping Twitter scraping (X anti-scraping blocks free proxies)");
+  return [];
 }
 
 // ─── Main job ─────────────────────────────────────────────────────────────────

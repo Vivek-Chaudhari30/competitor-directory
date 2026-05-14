@@ -14,7 +14,7 @@ import { COOKIE_NAME, ONE_YEAR_MS, COMPETITORS } from "@shared/const";
 import { sdk } from "./sdk";
 import { getSessionCookieOptions } from "./cookies";
 import { ENV } from "./env";
-import { seedCompaniesIfEmpty } from "../db";
+import { seedCompaniesIfEmpty, runMigrations } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -36,6 +36,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Run DB migrations before anything else
+  await runMigrations();
+
   const app = express();
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads

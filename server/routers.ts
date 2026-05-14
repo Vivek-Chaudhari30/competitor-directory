@@ -3,7 +3,12 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
-import { getRecentCompetitorPosts, getCompanies, addCompany, updateCompany, deleteCompany, updateUserSettings } from "./db";
+import {
+  getRecentCompetitorPosts,
+  getCompanies, addCompany, updateCompany, deleteCompany,
+  getPeople, addPerson, updatePerson, deletePerson,
+  updateUserSettings,
+} from "./db";
 import { runCompetitorMonitoringJob } from "./services/competitorMonitoring";
 
 export const appRouter = router({
@@ -68,6 +73,51 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         if (ctx.user?.role !== "admin") throw new Error("Only admins can delete companies");
         await deleteCompany(input.id);
+        return { success: true };
+      }),
+  }),
+
+  people: router({
+    list: publicProcedure.query(async () => getPeople()),
+
+    add: protectedProcedure
+      .input(z.object({
+        id: z.string().min(1).max(64),
+        name: z.string().min(1).max(255),
+        title: z.string().optional(),
+        company: z.string().optional(),
+        linkedin: z.string().url(),
+        twitter: z.string().url().optional().or(z.literal("")),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user?.role !== "admin") throw new Error("Only admins can add people");
+        const id = input.id || input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        return addPerson({ ...input, id, isActive: true });
+      }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.string(),
+        name: z.string().min(1).max(255).optional(),
+        title: z.string().optional(),
+        company: z.string().optional(),
+        linkedin: z.string().url().optional(),
+        twitter: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user?.role !== "admin") throw new Error("Only admins can update people");
+        const { id, ...data } = input;
+        await updatePerson(id, data);
+        return { success: true };
+      }),
+
+    remove: protectedProcedure
+      .input(z.object({ id: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user?.role !== "admin") throw new Error("Only admins can delete people");
+        await deletePerson(input.id);
         return { success: true };
       }),
   }),

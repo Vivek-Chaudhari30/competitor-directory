@@ -6,12 +6,7 @@ import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "d
  * Columns use camelCase to match both database fields and generated types.
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -26,57 +21,7 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// Competitor posts table - stores social media posts from competitors
-export const competitorPosts = mysqlTable("competitor_posts", {
-  id: int("id").autoincrement().primaryKey(),
-  companyId: varchar("companyId", { length: 64 }).notNull(),
-  platform: mysqlEnum("platform", ["linkedin", "twitter"]).notNull(),
-  postId: varchar("postId", { length: 255 }).notNull().unique(),
-  content: text("content").notNull(),
-  authorName: varchar("authorName", { length: 255 }),
-  authorUrl: text("authorUrl"),
-  postUrl: text("postUrl").notNull(),
-  postedAt: timestamp("postedAt").notNull(),
-  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
-
-export type CompetitorPost = typeof competitorPosts.$inferSelect;
-export type InsertCompetitorPost = typeof competitorPosts.$inferInsert;
-
-// Notifications table - tracks which posts have been sent to the user
-export const notifications = mysqlTable("notifications", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull(),
-  postId: int("postId").notNull(),
-  emailSent: timestamp("emailSent"),
-  emailStatus: mysqlEnum("emailStatus", ["pending", "sent", "failed"]).default("pending").notNull(),
-  emailError: text("emailError"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
-
-export type Notification = typeof notifications.$inferSelect;
-export type InsertNotification = typeof notifications.$inferInsert;
-
-// Scheduled task logs - tracks when monitoring tasks run
-export const taskLogs = mysqlTable("task_logs", {
-  id: int("id").autoincrement().primaryKey(),
-  taskName: varchar("taskName", { length: 255 }).notNull(),
-  status: mysqlEnum("status", ["running", "success", "failed"]).notNull(),
-  postsFound: int("postsFound").default(0),
-  emailsSent: int("emailsSent").default(0),
-  error: text("error"),
-  startedAt: timestamp("startedAt").notNull(),
-  completedAt: timestamp("completedAt"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type TaskLog = typeof taskLogs.$inferSelect;
-export type InsertTaskLog = typeof taskLogs.$inferInsert;
-
-// Companies table — dynamic list of competitors to track
+// ─── Companies table — dynamic list of competitor companies to track ──────────
 export const companies = mysqlTable("companies", {
   id: varchar("id", { length: 64 }).primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
@@ -92,3 +37,82 @@ export const companies = mysqlTable("companies", {
 
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = typeof companies.$inferInsert;
+
+// ─── People table — individual founders/executives to track ──────────────────
+export const people = mysqlTable("people", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  /** Job title / role, e.g. "CEO & Co-founder" */
+  title: varchar("title", { length: 255 }),
+  /** Current company or affiliation */
+  company: varchar("company", { length: 255 }),
+  linkedin: varchar("linkedin", { length: 500 }).notNull(),
+  twitter: varchar("twitter", { length: 500 }),
+  notes: text("notes"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Person = typeof people.$inferSelect;
+export type InsertPerson = typeof people.$inferInsert;
+
+// ─── Competitor posts table ────────────────────────────────────────────────────
+// Stores every post ever fetched — both company pages and individual profiles.
+export const competitorPosts = mysqlTable("competitor_posts", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Set when the post comes from a tracked company page. */
+  companyId: varchar("companyId", { length: 64 }),
+  /** Set when the post comes from a tracked individual (person). */
+  personId: varchar("personId", { length: 64 }),
+  /** Whether this post is from a company page or an individual profile. */
+  sourceType: mysqlEnum("sourceType", ["company", "person"]).default("company").notNull(),
+  platform: mysqlEnum("platform", ["linkedin", "twitter"]).notNull(),
+  postId: varchar("postId", { length: 255 }).notNull().unique(),
+  content: text("content").notNull(),
+  authorName: varchar("authorName", { length: 255 }),
+  authorUrl: text("authorUrl"),
+  postUrl: text("postUrl").notNull(),
+  postedAt: timestamp("postedAt").notNull(),
+  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
+  // Engagement metrics (best-effort — not all platforms expose all fields)
+  likeCount: int("likeCount"),
+  commentCount: int("commentCount"),
+  shareCount: int("shareCount"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type CompetitorPost = typeof competitorPosts.$inferSelect;
+export type InsertCompetitorPost = typeof competitorPosts.$inferInsert;
+
+// ─── Notifications table ───────────────────────────────────────────────────────
+export const notifications = mysqlTable("notifications", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  postId: int("postId").notNull(),
+  emailSent: timestamp("emailSent"),
+  emailStatus: mysqlEnum("emailStatus", ["pending", "sent", "failed"]).default("pending").notNull(),
+  emailError: text("emailError"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = typeof notifications.$inferInsert;
+
+// ─── Task logs ────────────────────────────────────────────────────────────────
+export const taskLogs = mysqlTable("task_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  taskName: varchar("taskName", { length: 255 }).notNull(),
+  status: mysqlEnum("status", ["running", "success", "failed"]).notNull(),
+  postsFound: int("postsFound").default(0),
+  emailsSent: int("emailsSent").default(0),
+  error: text("error"),
+  startedAt: timestamp("startedAt").notNull(),
+  completedAt: timestamp("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TaskLog = typeof taskLogs.$inferSelect;
+export type InsertTaskLog = typeof taskLogs.$inferInsert;

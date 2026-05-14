@@ -1,8 +1,8 @@
 import axios from "axios";
-import { getCompanies, addCompetitorPost, createTaskLog, updateTaskLog, getUsersWithEmailEnabled } from "../db";
+import { getCompanies, getPeople, addCompetitorPost, createTaskLog, updateTaskLog, getUsersWithEmailEnabled } from "../db";
 import { sendDailyDigestEmail } from "./emailService";
 import { ENV } from "../_core/env";
-import type { Company } from "../../drizzle/schema";
+import type { Company, Person } from "../../drizzle/schema";
 
 // ─── Apify helpers ────────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ async function runApifyActor(actorId: string, input: object): Promise<any[]> {
       {
         params: { token: ENV.apifyApiKey },
         headers: { "Content-Type": "application/json" },
-        timeout: 5 * 60 * 1000, // actors can take up to 5 min
+        timeout: 5 * 60 * 1000,
       }
     );
     return Array.isArray(response.data) ? response.data : [];
@@ -30,35 +30,66 @@ async function runApifyActor(actorId: string, input: object): Promise<any[]> {
   }
 }
 
-// ─── LinkedIn ─────────────────────────────────────────────────────────────────
+// ─── Engagement helpers ───────────────────────────────────────────────────────
 
-function extractLinkedInCompanySlug(url: string): string {
-  return url.replace(/\/$/, "").split("/").pop() ?? url;
+/** Extract like/reaction count from various field shapes Apify actors use. */
+function pickLikeCount(item: any): number | null {
+  const v =
+    item.likeCount ??
+    item.numLikes ??
+    item.likes ??
+    item.reactions?.numReactions ??
+    item.numReactions ??
+    item.totalReactionCount ??
+    null;
+  return typeof v === "number" ? v : null;
 }
 
-async function fetchLinkedInPosts(trackedCompanies: Company[]) {
+function pickCommentCount(item: any): number | null {
+  const v =
+    item.commentCount ??
+    item.numComments ??
+    item.comments ??
+    item.totalSocialActivityCounts?.numComments ??
+    null;
+  return typeof v === "number" ? v : null;
+}
+
+function pickShareCount(item: any): number | null {
+  const v =
+    item.shareCount ??
+    item.numShares ??
+    item.shares ??
+    item.totalSocialActivityCounts?.numShares ??
+    null;
+  return typeof v === "number" ? v : null;
+}
+
+// ─── LinkedIn Company Posts ───────────────────────────────────────────────────
+
+function extractLinkedInSlug(url: string): string {
+  return url.replace(/\/$/, "").replace(/\/posts\/?$/, "").split("/").pop() ?? url;
+}
+
+async function fetchLinkedInCompanyPosts(trackedCompanies: Company[]) {
   const linkedinUrls = trackedCompanies.map(c => c.linkedin);
 
   const items = await runApifyActor("harvestapi/linkedin-company-posts", {
     targetUrls: linkedinUrls,
-    maxPosts: 5,
+    maxPosts: 10,
     postedLimit: "week",
-    scrapeReactions: false,
+    scrapeReactions: true,
     scrapeComments: false,
   });
 
   return items.flatMap(item => {
-    // author.linkedinUrl looks like "https://www.linkedin.com/company/gleanwork/posts"
-    // strip trailing /posts before extracting the slug
     const rawAuthorUrl: string = item.author?.linkedinUrl ?? item.authorUrl ?? item.companyUrl ?? "";
     const cleanedAuthorUrl = rawAuthorUrl.replace(/\/posts\/?$/, "");
-    const itemSlug = extractLinkedInCompanySlug(cleanedAuthorUrl);
+    const itemSlug = extractLinkedInSlug(cleanedAuthorUrl);
 
     const company = trackedCompanies.find(c =>
-      extractLinkedInCompanySlug(c.linkedin) === itemSlug ||
-      c.linkedin.includes(itemSlug)
+      extractLinkedInSlug(c.linkedin) === itemSlug || c.linkedin.includes(itemSlug)
     );
-
     if (!company) return [];
 
     const postUrl: string = item.linkedinUrl ?? item.postUrl ?? item.url ?? company.linkedin;
@@ -66,22 +97,69 @@ async function fetchLinkedInPosts(trackedCompanies: Company[]) {
 
     return [{
       companyId: company.id,
+      personId: null,
+      sourceType: "company" as const,
       platform: "linkedin" as const,
-      postId: `linkedin-${item.id ?? item.activityId ?? postUrl}`,
+      postId: `linkedin-company-${item.id ?? item.activityId ?? postUrl}`,
       content: item.content ?? item.text ?? "",
       authorName: item.author?.name ?? item.authorName ?? company.name,
       authorUrl: cleanedAuthorUrl || company.linkedin,
       postUrl,
       postedAt: new Date(postedAtRaw ?? Date.now()),
+      likeCount: pickLikeCount(item),
+      commentCount: pickCommentCount(item),
+      shareCount: pickShareCount(item),
+    }];
+  });
+}
+
+// ─── LinkedIn Individual Profile Posts ───────────────────────────────────────
+
+async function fetchLinkedInPersonPosts(trackedPeople: Person[]) {
+  if (trackedPeople.length === 0) return [];
+
+  const profileUrls = trackedPeople.map(p => p.linkedin);
+
+  const items = await runApifyActor("harvestapi/linkedin-profile-posts", {
+    profileUrls,
+    maxPosts: 10,
+    postedLimit: "week",
+    scrapeReactions: true,
+    scrapeComments: false,
+  });
+
+  return items.flatMap(item => {
+    const rawAuthorUrl: string = item.author?.linkedinUrl ?? item.authorUrl ?? item.profileUrl ?? "";
+    const cleanedAuthorUrl = rawAuthorUrl.replace(/\/recent-activity.*$/, "").replace(/\/posts\/?$/, "");
+    const itemSlug = extractLinkedInSlug(cleanedAuthorUrl);
+
+    const person = trackedPeople.find(p =>
+      extractLinkedInSlug(p.linkedin) === itemSlug || p.linkedin.includes(itemSlug)
+    );
+    if (!person) return [];
+
+    const postUrl: string = item.linkedinUrl ?? item.postUrl ?? item.url ?? person.linkedin;
+    const postedAtRaw = item.postedAt?.date ?? item.postedAt ?? item.publishedAt ?? item.date;
+
+    return [{
+      companyId: null,
+      personId: person.id,
+      sourceType: "person" as const,
+      platform: "linkedin" as const,
+      postId: `linkedin-person-${item.id ?? item.activityId ?? postUrl}`,
+      content: item.content ?? item.text ?? "",
+      authorName: item.author?.name ?? item.authorName ?? person.name,
+      authorUrl: cleanedAuthorUrl || person.linkedin,
+      postUrl,
+      postedAt: new Date(postedAtRaw ?? Date.now()),
+      likeCount: pickLikeCount(item),
+      commentCount: pickCommentCount(item),
+      shareCount: pickShareCount(item),
     }];
   });
 }
 
 // ─── Twitter/X ────────────────────────────────────────────────────────────────
-
-function twitterHandleFromUrl(url: string): string {
-  return url.replace(/\/$/, "").split("/").pop()?.replace("@", "") ?? "";
-}
 
 async function fetchTwitterPosts() {
   // Twitter/X blocks Apify free-tier proxies — skip to avoid wasting time/credits
@@ -95,7 +173,7 @@ export async function runCompetitorMonitoringJob() {
   const startTime = new Date();
   const taskName = "daily-competitor-monitoring";
 
-  console.log(`[${taskName}] Starting competitor monitoring job...`);
+  console.log(`[${taskName}] Starting competitor monitoring job…`);
 
   try {
     const taskLog = await createTaskLog({
@@ -104,40 +182,43 @@ export async function runCompetitorMonitoringJob() {
       startedAt: startTime,
     });
 
-    if (!taskLog) {
-      console.warn(`[${taskName}] No database — task log skipped, continuing job`);
-    }
+    if (!taskLog) console.warn(`[${taskName}] No DB — task log skipped, continuing`);
 
-    // Load companies from DB
-    const trackedCompanies = await getCompanies();
-    console.log(`[${taskName}] Tracking ${trackedCompanies.length} companies`);
+    const [trackedCompanies, trackedPeople] = await Promise.all([
+      getCompanies(),
+      getPeople(),
+    ]);
 
-    // Fetch LinkedIn and Twitter posts in parallel
-    const [linkedinPosts, twitterPosts] = await Promise.all([
-      fetchLinkedInPosts(trackedCompanies),
+    console.log(`[${taskName}] Tracking ${trackedCompanies.length} companies, ${trackedPeople.length} people`);
+
+    const [companyPosts, personPosts, twitterPosts] = await Promise.all([
+      fetchLinkedInCompanyPosts(trackedCompanies),
+      fetchLinkedInPersonPosts(trackedPeople),
       fetchTwitterPosts(),
     ]);
 
-    const allPosts = [...linkedinPosts, ...twitterPosts];
-    console.log(`[${taskName}] Fetched ${allPosts.length} posts (${linkedinPosts.length} LinkedIn, ${twitterPosts.length} Twitter)`);
+    const allPosts = [...companyPosts, ...personPosts, ...twitterPosts];
+    console.log(
+      `[${taskName}] Fetched ${allPosts.length} posts ` +
+      `(${companyPosts.length} company LinkedIn, ${personPosts.length} person LinkedIn, ${twitterPosts.length} Twitter)`
+    );
 
     const insertedPostIds: number[] = [];
     for (const post of allPosts) {
-      const added = await addCompetitorPost(post);
+      const added = await addCompetitorPost(post as any);
       if (added) insertedPostIds.push(added.id);
     }
 
     const postsAdded = insertedPostIds.length;
-    console.log(`[${taskName}] Successfully added ${postsAdded} new posts to database`);
+    console.log(`[${taskName}] Added ${postsAdded} new posts`);
 
     if (postsAdded > 0) {
-      const recentPosts = allPosts.filter((_, i) => insertedPostIds.length > 0);
       const subscribers = await getUsersWithEmailEnabled();
       let emailsSentCount = 0;
 
       for (const subscriber of subscribers) {
         if (!subscriber.email) continue;
-        const sent = await sendDailyDigestEmail(subscriber.email, subscriber.name ?? "", recentPosts as any);
+        const sent = await sendDailyDigestEmail(subscriber.email, subscriber.name ?? "", allPosts as any);
         if (sent) emailsSentCount++;
       }
 
@@ -155,7 +236,6 @@ export async function runCompetitorMonitoringJob() {
     console.log(`[${taskName}] Job completed successfully`);
   } catch (error) {
     console.error(`[${taskName}] Job failed:`, error);
-
     await createTaskLog({
       taskName,
       status: "failed",
@@ -163,27 +243,5 @@ export async function runCompetitorMonitoringJob() {
       startedAt: startTime,
       completedAt: new Date(),
     });
-
-    console.error(`[${taskName}] Monitoring failed:`, error);
   }
-}
-
-export async function sendCompetitorUpdateEmail(userEmail: string, posts: any[]) {
-  console.log(`[Email Service] Preparing to send email to ${userEmail} with ${posts.length} competitor updates`);
-
-  const emailContent = `
-    <h2>Daily Competitor Updates</h2>
-    <p>Here are the latest posts from your competitors:</p>
-    ${posts.map(post => `
-      <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0;">
-        <h3>${post.authorName}</h3>
-        <p>${post.content}</p>
-        <p><a href="${post.postUrl}">View Post</a></p>
-      </div>
-    `).join("")}
-  `;
-
-  console.log(`[Email Service] Email prepared for ${userEmail}`);
-
-  return true;
 }

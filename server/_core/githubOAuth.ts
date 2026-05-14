@@ -80,8 +80,9 @@ export function registerGitHubOAuthRoutes(app: Express) {
       res.redirect(302, "/");
     } catch (error: any) {
       const msg = error?.response?.data ?? error?.message ?? String(error);
-      console.error("[GitHub OAuth] Callback failed:", msg);
-      res.status(500).send(`GitHub login failed: ${JSON.stringify(msg)}`);
+      const cause = error?.cause?.message ?? error?.original?.message ?? null;
+      console.error("[GitHub OAuth] Callback failed:", msg, cause);
+      res.status(500).send(`GitHub login failed: ${JSON.stringify(msg)} | cause: ${JSON.stringify(cause)}`);
     }
   });
 }

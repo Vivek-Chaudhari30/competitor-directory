@@ -4,11 +4,16 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { registerGitHubOAuthRoutes } from "./githubOAuth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { scheduledCompetitorMonitoringHandler } from "../handlers/scheduledCompetitorMonitoring";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { sdk } from "./sdk";
+import { getSessionCookieOptions } from "./cookies";
+import { ENV } from "./env";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -37,6 +42,25 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  registerGitHubOAuthRoutes(app);
+
+  // Dev-only login bypass — disabled in production
+  if (!ENV.isProduction) {
+    app.post("/api/auth/dev-login", async (req, res) => {
+      try {
+        const sessionToken = await sdk.createSessionToken("dev_local_user", {
+          name: "Dev User",
+          expiresInMs: ONE_YEAR_MS,
+        });
+        const cookieOptions = getSessionCookieOptions(req);
+        res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: String(err) });
+      }
+    });
+  }
+
   // Scheduled task handlers (must be before tRPC)
   app.post("/api/scheduled/competitor-monitoring", scheduledCompetitorMonitoringHandler);
 

@@ -1,0 +1,16 @@
+name: Daily Competitor Monitoring
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # 9:00 AM UTC daily
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger monitoring job
+        run: |
+          curl --fail -X POST "${{ secrets.APP_URL }}/api/scheduled/competitor-monitoring" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json"

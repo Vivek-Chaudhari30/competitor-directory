@@ -4,6 +4,15 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { BarChart3, Home as HomeIcon, LogOut, Settings as SettingsIcon } from "lucide-react";
 
+const IS_DEV_MODE = import.meta.env.DEV && !import.meta.env.VITE_OAUTH_PORTAL_URL;
+const HAS_GITHUB_AUTH = import.meta.env.VITE_GITHUB_CLIENT_ID !== undefined
+  || !import.meta.env.VITE_OAUTH_PORTAL_URL;
+
+async function devLogin() {
+  await fetch("/api/auth/dev-login", { method: "POST" });
+  window.location.reload();
+}
+
 export function Navigation() {
   const [location, navigate] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
@@ -68,12 +77,27 @@ export function Navigation() {
                 Sign Out
               </Button>
             </>
+          ) : IS_DEV_MODE ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={devLogin}
+              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+            >
+              Dev Login
+            </Button>
+          ) : HAS_GITHUB_AUTH ? (
+            <Button
+              size="sm"
+              onClick={() => { window.location.href = "/api/auth/github"; }}
+              className="gap-2"
+            >
+              Sign in with GitHub
+            </Button>
           ) : (
             <Button
               size="sm"
-              onClick={() => {
-                window.location.href = getLoginUrl();
-              }}
+              onClick={() => { window.location.href = getLoginUrl(); }}
             >
               Sign In
             </Button>

@@ -279,8 +279,28 @@ class SDKServer {
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
 
-    // If user not in DB, sync from OAuth server automatically
-    if (!user) {
+    // Dev bypass: no DB or Manus needed in local development
+    if (!user && !ENV.isProduction && sessionUserId === "dev_local_user") {
+      const now = new Date();
+      return {
+        id: -2,
+        openId: "dev_local_user",
+        name: "Dev User",
+        email: "dev@localhost",
+        loginMethod: "dev",
+        role: "admin" as const,
+        createdAt: now,
+        updatedAt: now,
+        lastSignedIn: now,
+      };
+    }
+
+    // GitHub/non-Manus users are fully managed in our DB — never call Manus API for them
+    const isSelfManagedUser =
+      sessionUserId.startsWith("github_") || sessionUserId === "dev_local_user";
+
+    // If user not in DB, sync from Manus OAuth server (Manus-only path)
+    if (!user && !isSelfManagedUser) {
       try {
         const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
         await db.upsertUser({

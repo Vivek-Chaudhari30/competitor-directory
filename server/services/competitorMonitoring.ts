@@ -1,52 +1,115 @@
-import { COMPETITORS } from "../../shared/const";
+import axios from "axios";
+import { COMPETITORS, Company } from "../../shared/const";
 import { addCompetitorPost, createTaskLog, updateTaskLog, createNotification, getUserByOpenId } from "../db";
 import { notifyOwner } from "../_core/notification";
 import { ENV } from "../_core/env";
 
-/**
- * Simulated social media post fetching
- * In production, this would integrate with LinkedIn API and Twitter API
- */
-async function fetchCompetitorPosts() {
-  const posts = [];
+// ─── Apify helpers ────────────────────────────────────────────────────────────
 
-  for (const company of COMPETITORS) {
-    // Simulate fetching posts from LinkedIn and Twitter
-    // In production, this would call actual APIs
-
-    // LinkedIn post example
-    const linkedinPost = {
-      companyId: company.id,
-      platform: "linkedin" as const,
-      postId: `${company.id}-linkedin-${Date.now()}`,
-      content: `Latest update from ${company.name}: Advancing AI capabilities and enterprise solutions.`,
-      authorName: company.founders?.[0]?.name || company.name,
-      authorUrl: company.founders?.[0]?.linkedin || company.linkedin,
-      postUrl: company.linkedin,
-      postedAt: new Date(),
-    };
-
-    // Twitter post example
-    const twitterPost = {
-      companyId: company.id,
-      platform: "twitter" as const,
-      postId: `${company.id}-twitter-${Date.now()}`,
-      content: `Excited to announce new features from ${company.name}! 🚀`,
-      authorName: company.founders?.[0]?.name || company.name,
-      authorUrl: company.founders?.[0]?.twitter || company.twitter,
-      postUrl: company.twitter,
-      postedAt: new Date(),
-    };
-
-    posts.push(linkedinPost, twitterPost);
+async function runApifyActor(actorId: string, input: object): Promise<any[]> {
+  if (!ENV.apifyApiKey) {
+    console.warn(`[Apify] APIFY_API_KEY not set — skipping ${actorId}`);
+    return [];
   }
 
-  return posts;
+  try {
+    const slug = actorId.replace("/", "~");
+    const response = await axios.post(
+      `https://api.apify.com/v2/acts/${slug}/run-sync-get-dataset-items`,
+      input,
+      {
+        params: { token: ENV.apifyApiKey },
+        headers: { "Content-Type": "application/json" },
+        timeout: 5 * 60 * 1000, // actors can take up to 5 min
+      }
+    );
+    return Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    console.error(`[Apify] Actor ${actorId} failed:`, error);
+    return [];
+  }
 }
 
-/**
- * Main competitor monitoring job - runs daily
- */
+// ─── LinkedIn ─────────────────────────────────────────────────────────────────
+
+function extractLinkedInCompanySlug(url: string): string {
+  return url.replace(/\/$/, "").split("/").pop() ?? url;
+}
+
+async function fetchLinkedInPosts() {
+  const linkedinUrls = COMPETITORS.map(c => c.linkedin);
+
+  const items = await runApifyActor("harvestapi/linkedin-company-posts", {
+    targetUrls: linkedinUrls,
+    maxPosts: 5,
+    postedLimit: "24h",
+    scrapeReactions: false,
+    scrapeComments: false,
+  });
+
+  return items.flatMap(item => {
+    // Match result back to a company by comparing slugs in the URL
+    const itemSlug = extractLinkedInCompanySlug(item.authorUrl ?? item.companyUrl ?? "");
+    const company = COMPETITORS.find(c =>
+      extractLinkedInCompanySlug(c.linkedin) === itemSlug ||
+      c.linkedin.includes(itemSlug)
+    );
+
+    if (!company) return [];
+
+    return [{
+      companyId: company.id,
+      platform: "linkedin" as const,
+      // Use the real post URL as a stable dedup key
+      postId: `linkedin-${item.id ?? item.activityId ?? item.postUrl ?? item.url}`,
+      content: item.text ?? item.content ?? "",
+      authorName: item.author?.name ?? item.authorName ?? company.name,
+      authorUrl: item.author?.url ?? item.authorUrl ?? company.linkedin,
+      postUrl: item.postUrl ?? item.url ?? company.linkedin,
+      postedAt: new Date(item.postedAt ?? item.publishedAt ?? item.date ?? Date.now()),
+    }];
+  });
+}
+
+// ─── Twitter/X ────────────────────────────────────────────────────────────────
+
+function twitterHandleFromUrl(url: string): string {
+  return url.replace(/\/$/, "").split("/").pop()?.replace("@", "") ?? "";
+}
+
+async function fetchTwitterPosts() {
+  const handles = COMPETITORS.map(c => twitterHandleFromUrl(c.twitter)).filter(Boolean);
+
+  const items = await runApifyActor("pear_fight/twitter-scraper", {
+    usernames: handles,
+    maxTweets: 5,
+    proxyConfig: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
+  });
+
+  return items.flatMap(item => {
+    const handle = (item.user?.screen_name ?? item.username ?? "").toLowerCase();
+    const company = COMPETITORS.find(c =>
+      twitterHandleFromUrl(c.twitter).toLowerCase() === handle
+    );
+
+    if (!company) return [];
+
+    const tweetId = item.id ?? item.id_str;
+    return [{
+      companyId: company.id,
+      platform: "twitter" as const,
+      postId: `twitter-${tweetId}`,
+      content: item.text ?? item.full_text ?? "",
+      authorName: item.user?.name ?? handle ?? company.name,
+      authorUrl: `https://x.com/${handle}`,
+      postUrl: item.url ?? (tweetId ? `https://x.com/${handle}/status/${tweetId}` : company.twitter),
+      postedAt: new Date(item.created_at ?? item.createdAt ?? Date.now()),
+    }];
+  });
+}
+
+// ─── Main job ─────────────────────────────────────────────────────────────────
+
 export async function runCompetitorMonitoringJob() {
   const startTime = new Date();
   const taskName = "daily-competitor-monitoring";
@@ -54,7 +117,6 @@ export async function runCompetitorMonitoringJob() {
   console.log(`[${taskName}] Starting competitor monitoring job...`);
 
   try {
-    // Create task log entry
     const taskLog = await createTaskLog({
       taskName,
       status: "running",
@@ -62,63 +124,62 @@ export async function runCompetitorMonitoringJob() {
     });
 
     if (!taskLog) {
-      console.error(`[${taskName}] Failed to create task log`);
-      return;
+      console.warn(`[${taskName}] No database — task log skipped, continuing job`);
     }
 
-    // Fetch competitor posts
-    const posts = await fetchCompetitorPosts();
-    console.log(`[${taskName}] Fetched ${posts.length} posts from competitors`);
+    // Fetch LinkedIn and Twitter posts in parallel
+    const [linkedinPosts, twitterPosts] = await Promise.all([
+      fetchLinkedInPosts(),
+      fetchTwitterPosts(),
+    ]);
 
-    let postsAdded = 0;
-    for (const post of posts) {
+    const allPosts = [...linkedinPosts, ...twitterPosts];
+    console.log(`[${taskName}] Fetched ${allPosts.length} posts (${linkedinPosts.length} LinkedIn, ${twitterPosts.length} Twitter)`);
+
+    const insertedPostIds: number[] = [];
+    for (const post of allPosts) {
       const added = await addCompetitorPost(post);
-      if (added) postsAdded++;
+      if (added) insertedPostIds.push(added.id);
     }
 
-    console.log(`[${taskName}] Successfully added ${postsAdded} posts to database`);
+    const postsAdded = insertedPostIds.length;
+    console.log(`[${taskName}] Successfully added ${postsAdded} new posts to database`);
 
-    // Get owner user
     const owner = await getUserByOpenId(ENV.ownerOpenId);
 
     if (owner && postsAdded > 0) {
-      // Create notifications for new posts
-      let emailsSent = 0;
-      for (let i = 0; i < postsAdded; i++) {
+      let notificationsCreated = 0;
+      for (const postId of insertedPostIds) {
         const notification = await createNotification({
           userId: owner.id,
-          postId: i + 1, // In production, use actual post IDs
+          postId,
           emailStatus: "pending",
         });
-
-        if (notification) {
-          emailsSent++;
-        }
+        if (notification) notificationsCreated++;
       }
 
-      console.log(`[${taskName}] Created ${emailsSent} notifications`);
+      console.log(`[${taskName}] Created ${notificationsCreated} notifications`);
 
-      // Notify owner of the monitoring run
       await notifyOwner({
         title: "Daily Competitor Monitoring Complete",
-        content: `Found ${postsAdded} new posts from ${COMPETITORS.length} competitors. ${emailsSent} notifications created.`,
+        content: `Found ${postsAdded} new posts from ${COMPETITORS.length} competitors (${linkedinPosts.length} LinkedIn, ${twitterPosts.length} Twitter).`,
       });
     }
 
-    // Update task log with success
-    await updateTaskLog(taskLog.id, {
-      status: "success",
-      postsFound: postsAdded,
-      emailsSent: postsAdded,
-      completedAt: new Date(),
-    });
+    if (taskLog) {
+      await updateTaskLog(taskLog.id, {
+        status: "success",
+        postsFound: postsAdded,
+        emailsSent: postsAdded,
+        completedAt: new Date(),
+      });
+    }
 
     console.log(`[${taskName}] Job completed successfully`);
   } catch (error) {
     console.error(`[${taskName}] Job failed:`, error);
 
-    // Log error to database
-    const taskLog = await createTaskLog({
+    await createTaskLog({
       taskName,
       status: "failed",
       error: String(error),
@@ -126,7 +187,6 @@ export async function runCompetitorMonitoringJob() {
       completedAt: new Date(),
     });
 
-    // Notify owner of failure
     await notifyOwner({
       title: "Daily Competitor Monitoring Failed",
       content: `Error: ${String(error)}`,
@@ -134,17 +194,8 @@ export async function runCompetitorMonitoringJob() {
   }
 }
 
-/**
- * Email notification service
- * In production, this would integrate with email service like SendGrid or AWS SES
- */
 export async function sendCompetitorUpdateEmail(userEmail: string, posts: any[]) {
   console.log(`[Email Service] Preparing to send email to ${userEmail} with ${posts.length} competitor updates`);
-
-  // In production, this would:
-  // 1. Format posts into a nice email template
-  // 2. Send via email service (SendGrid, AWS SES, etc.)
-  // 3. Track delivery status
 
   const emailContent = `
     <h2>Daily Competitor Updates</h2>
@@ -155,7 +206,7 @@ export async function sendCompetitorUpdateEmail(userEmail: string, posts: any[])
         <p>${post.content}</p>
         <p><a href="${post.postUrl}">View Post</a></p>
       </div>
-    `).join('')}
+    `).join("")}
   `;
 
   console.log(`[Email Service] Email prepared for ${userEmail}`);

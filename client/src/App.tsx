@@ -1,46 +1,56 @@
 import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { ThemeProvider } from "./contexts/ThemeContext";
-import { Navigation } from "./components/Navigation";
+import { Sidebar } from "./components/Sidebar";
 import Home from "./pages/Home";
 import Updates from "./pages/Updates";
 import Settings from "./pages/Settings";
+import { useState, useEffect } from "react";
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
-      <Route path={"/"} component={Home} />
-      <Route path={"/updates"} component={Updates} />
-      <Route path={"/settings"} component={Settings} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
-      <Route component={NotFound} />
+      <Route path="/"         component={Home} />
+      <Route path="/updates"  component={Updates} />
+      <Route path="/settings" component={Settings} />
+      <Route path="/404"      component={NotFound} />
+      <Route                  component={NotFound} />
     </Switch>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
+  const [collapsed, setCollapsed] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "dark") {
+      root.classList.add("dark");
+      root.style.colorScheme = "dark";
+    } else {
+      root.classList.remove("dark");
+      root.style.colorScheme = "light";
+    }
+  }, [theme]);
+
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="light"
-        // switchable
-      >
-        <TooltipProvider>
-          <Toaster />
-          <Navigation />
-          <Router />
-        </TooltipProvider>
-      </ThemeProvider>
+      <div className="min-h-screen flex" style={{ background: "rgb(var(--ink-bg))", color: "rgb(var(--ink-text))" }}>
+        <Sidebar
+          collapsed={collapsed}
+          onToggleCollapse={() => setCollapsed(v => !v)}
+          theme={theme}
+          onToggleTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+        />
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          <div className="mx-auto max-w-[1100px] px-8 lg:px-12 py-12">
+            <Router />
+          </div>
+        </main>
+      </div>
+      <Toaster />
     </ErrorBoundary>
   );
 }

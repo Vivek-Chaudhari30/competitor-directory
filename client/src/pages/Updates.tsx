@@ -1,65 +1,236 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, ExternalLink, Mail, ChevronDown, ChevronUp } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useState, useMemo } from "react";
 
-type SortOrder = "newest" | "oldest";
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-function PostCard({ post }: { post: any }) {
-  const [expanded, setExpanded] = useState(false);
-  const isLong = (post.content ?? "").length > 280;
+function relativeTime(date: string | Date): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  const diff = Date.now() - d.getTime();
+  const mins  = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days  = Math.floor(diff / 86_400_000);
+  if (mins  < 1)  return "just now";
+  if (mins  < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days  < 7)  return `${days}d ago`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
+const CATEGORY_LABELS: Record<string, string> = {
+  "ai-context":  "AI & Context",
+  "gtm-sales":   "GTM / Sales",
+  "a16z":        "a16z Speedrun",
+  "research":    "Research",
+  "product":     "Product",
+  "general":     "General",
+};
+
+// ── Sub-components ───────────────────────────────────────────────────────────
+
+function CompanyAvatar({ name, size = 32 }: { name: string; size?: number }) {
+  const letter = (name || "?").trim().charAt(0).toUpperCase();
+  let hash = 0;
+  for (let i = 0; i < (name || "").length; i++) hash = ((hash * 31) + name.charCodeAt(i)) >>> 0;
+  const hue = hash % 360;
   return (
-    <Card className="hover:shadow-md transition-shadow">
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <span className="text-sm font-semibold text-foreground">{post.authorName}</span>
-              <span className={`text-xs px-2 py-0.5 rounded font-medium ${
-                post.platform === "linkedin"
-                  ? "bg-blue-100 text-blue-700"
-                  : "bg-sky-100 text-sky-700"
-              }`}>
-                {post.platform}
-              </span>
-            </div>
-
-            <p className="text-sm text-foreground leading-relaxed whitespace-pre-line">
-              {expanded || !isLong ? post.content : `${(post.content ?? "").slice(0, 280)}…`}
-            </p>
-
-            {isLong && (
-              <button
-                onClick={() => setExpanded(!expanded)}
-                className="mt-2 flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-700 font-medium"
-              >
-                {expanded ? (
-                  <><ChevronUp className="w-3 h-3" /> Show less</>
-                ) : (
-                  <><ChevronDown className="w-3 h-3" /> Show more</>
-                )}
-              </button>
-            )}
-
-            <div className="flex items-center gap-4 text-xs text-muted-foreground mt-3">
-              <span>Posted: {new Date(post.postedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-              <span>Fetched: {new Date(post.fetchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-            </div>
-          </div>
-
-          <a href={post.postUrl} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
-            <Button variant="ghost" size="sm">
-              <ExternalLink className="w-4 h-4" />
-            </Button>
-          </a>
-        </div>
-      </CardContent>
-    </Card>
+    <span
+      className="inline-flex items-center justify-center rounded-full font-serif font-semibold shrink-0 select-none"
+      style={{
+        width: size, height: size,
+        background: `oklch(0.93 0.02 ${hue})`,
+        color: `oklch(0.32 0.04 ${hue})`,
+        fontSize: Math.max(11, Math.round(size * 0.42)),
+      }}
+    >
+      {letter}
+    </span>
   );
 }
+
+function FilterChip({
+  label, active, onClick,
+}: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="transition-colors focus-ring"
+      style={{
+        padding: "4px 12px",
+        borderRadius: 9999,
+        fontSize: 12,
+        fontWeight: 500,
+        letterSpacing: "-0.01em",
+        border: "1px solid",
+        borderColor: active ? "rgb(var(--ink-text))" : "rgb(var(--ink-line))",
+        background: active ? "rgb(var(--ink-text))" : "transparent",
+        color: active ? "rgb(var(--ink-bg))" : "rgb(var(--ink-muted))",
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function PostBody({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const LINE_HEIGHT_EM = 1.65;
+  const LINES = 4;
+  const COLLAPSE_H = `${LINE_HEIGHT_EM * LINES}em`;
+
+  return (
+    <div>
+      <div
+        style={{
+          maxHeight: expanded ? "none" : COLLAPSE_H,
+          overflow: "hidden",
+          position: "relative",
+          maskImage: expanded
+            ? "none"
+            : `linear-gradient(to bottom, #000 ${Math.round(LINE_HEIGHT_EM * (LINES - 1.2) / (LINE_HEIGHT_EM * LINES) * 100)}%, transparent 100%)`,
+          WebkitMaskImage: expanded
+            ? "none"
+            : `linear-gradient(to bottom, #000 ${Math.round(LINE_HEIGHT_EM * (LINES - 1.2) / (LINE_HEIGHT_EM * LINES) * 100)}%, transparent 100%)`,
+          lineHeight: LINE_HEIGHT_EM,
+          fontSize: 13.5,
+          color: "rgb(var(--ink-text))",
+          whiteSpace: "pre-line",
+        }}
+      >
+        {content}
+      </div>
+      {content.length > 260 && (
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="focus-ring"
+          style={{
+            marginTop: 6,
+            fontSize: 12,
+            fontWeight: 500,
+            color: "rgb(var(--ink-accent))",
+            background: "none",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+          }}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PostCard({ post }: { post: any }) {
+  const catLabel = CATEGORY_LABELS[post.category] ?? post.category ?? null;
+
+  return (
+    <article
+      className="anim-fade-in"
+      style={{
+        padding: "20px 0",
+        borderBottom: "1px solid rgb(var(--ink-line))",
+      }}
+    >
+      {/* Header row */}
+      <div className="flex items-start gap-3">
+        <CompanyAvatar name={post.authorName ?? post.companyId} size={36} />
+        <div className="flex flex-col min-w-0 flex-1">
+          {/* Name + badges + time */}
+          <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: 2 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 600, color: "rgb(var(--ink-text))", letterSpacing: "-0.01em" }}>
+              {post.authorName ?? post.companyId}
+            </span>
+            {/* Platform badge */}
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 500,
+                padding: "1px 7px",
+                borderRadius: 4,
+                background: post.platform === "linkedin"
+                  ? "rgb(var(--ink-hair))"
+                  : "rgb(var(--ink-hair))",
+                color: post.platform === "linkedin"
+                  ? "rgb(59 130 246 / 0.9)"
+                  : "rgb(var(--ink-muted))",
+                letterSpacing: "0.02em",
+                textTransform: "capitalize",
+              }}
+            >
+              {post.platform}
+            </span>
+            {catLabel && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 500,
+                  padding: "1px 7px",
+                  borderRadius: 4,
+                  background: "rgb(var(--ink-hair))",
+                  color: "rgb(var(--ink-muted))",
+                  letterSpacing: "0.01em",
+                }}
+              >
+                {catLabel}
+              </span>
+            )}
+            <span
+              style={{
+                fontSize: 11.5,
+                color: "rgb(var(--ink-faint))",
+                marginLeft: "auto",
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}
+            >
+              {relativeTime(post.postedAt)}
+            </span>
+          </div>
+
+          {/* Content */}
+          <div style={{ marginTop: 6 }}>
+            <PostBody content={post.content ?? ""} />
+          </div>
+
+          {/* Footer */}
+          {post.postUrl && (
+            <div style={{ marginTop: 10 }}>
+              <a
+                href={post.postUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="focus-ring"
+                style={{
+                  fontSize: 11.5,
+                  color: "rgb(var(--ink-faint))",
+                  textDecoration: "none",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+                onMouseOver={e => (e.currentTarget.style.color = "rgb(var(--ink-accent))")}
+                onMouseOut={e => (e.currentTarget.style.color = "rgb(var(--ink-faint))")}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                View post
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+// ── Main page ────────────────────────────────────────────────────────────────
+
+type SortOrder = "newest" | "oldest";
 
 export default function Updates() {
   const { user, isAuthenticated } = useAuth();
@@ -79,7 +250,6 @@ export default function Updates() {
 
   const handleRefresh = () => { setIsRefreshing(true); runMonitoring(); };
 
-  // Build unique company list from posts
   const companies = useMemo(() => {
     if (!posts) return [];
     const seen = new Map<string, string>();
@@ -98,135 +268,242 @@ export default function Updates() {
     });
   }, [posts, selectedCompany, sortOrder]);
 
+  // Last fetched time
+  const lastFetched = useMemo(() => {
+    if (!posts || posts.length === 0) return null;
+    const latest = posts.reduce((a, b) =>
+      new Date(a.fetchedAt) > new Date(b.fetchedAt) ? a : b
+    );
+    return relativeTime(latest.fetchedAt);
+  }, [posts]);
+
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Card className="w-full max-w-md">
-          <CardHeader><CardTitle>Sign in to view updates</CardTitle></CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">You need to be signed in to view competitor updates.</p>
-          </CardContent>
-        </Card>
+      <div
+        className="anim-fade-in flex flex-col items-center justify-center"
+        style={{ minHeight: "60vh", gap: 12, textAlign: "center" }}
+      >
+        <p style={{ fontSize: 18, fontWeight: 600, color: "rgb(var(--ink-text))" }}>
+          Sign in to view updates
+        </p>
+        <p style={{ fontSize: 14, color: "rgb(var(--ink-muted))" }}>
+          You need to be signed in to view competitor updates.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">Competitor Updates</h1>
-            <p className="text-muted-foreground mt-1">Latest posts from your competitors on LinkedIn</p>
-          </div>
+    <div className="anim-fade-in" style={{ maxWidth: 720, margin: "0 auto" }}>
+
+      {/* ── Heading ── */}
+      <div style={{ marginBottom: 32 }}>
+        <div className="flex items-start justify-between gap-4">
+          <h1
+            className="font-serif"
+            style={{ fontSize: 34, fontWeight: 600, color: "rgb(var(--ink-text))", letterSpacing: "-0.02em", lineHeight: 1.1 }}
+          >
+            Updates
+          </h1>
           {user?.role === "admin" && (
-            <Button onClick={handleRefresh} disabled={isRefreshing || isLoading} variant="outline" size="sm">
-              {isRefreshing ? (
-                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Refreshing…</>
-              ) : (
-                <><RefreshCw className="w-4 h-4 mr-2" />Refresh Now</>
-              )}
-            </Button>
-          )}
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total Posts</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold">{posts?.length ?? 0}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Last Updated</CardTitle></CardHeader>
-            <CardContent>
-              <div className="text-sm text-foreground">
-                {posts && posts.length > 0
-                  ? new Date(posts[0].fetchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                  : "Never"}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Daily Monitoring</CardTitle></CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                <span className="text-sm">Active (9:00 AM UTC)</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Filters */}
-        {!isLoading && posts && posts.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 mb-6">
-            {/* Company filter chips */}
-            <div className="flex flex-wrap gap-2 flex-1">
-              <button
-                onClick={() => setSelectedCompany(null)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                  selectedCompany === null
-                    ? "bg-foreground text-background border-foreground"
-                    : "bg-background text-muted-foreground border-border hover:border-foreground"
-                }`}
-              >
-                All companies
-              </button>
-              {companies.map(c => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedCompany(selectedCompany === c.id ? null : c.id)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                    selectedCompany === c.id
-                      ? "bg-foreground text-background border-foreground"
-                      : "bg-background text-muted-foreground border-border hover:border-foreground"
-                  }`}
-                >
-                  {c.name}
-                </button>
-              ))}
-            </div>
-
-            {/* Sort */}
-            <select
-              value={sortOrder}
-              onChange={e => setSortOrder(e.target.value as SortOrder)}
-              className="text-xs border border-border rounded-md px-2 py-1.5 bg-background text-foreground cursor-pointer"
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing || isLoading}
+              className="focus-ring"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "7px 14px",
+                borderRadius: 7,
+                fontSize: 12.5,
+                fontWeight: 500,
+                border: "1px solid rgb(var(--ink-line))",
+                background: "transparent",
+                color: isRefreshing ? "rgb(var(--ink-faint))" : "rgb(var(--ink-muted))",
+                cursor: isRefreshing ? "not-allowed" : "pointer",
+                letterSpacing: "-0.01em",
+                transition: "border-color 150ms, color 150ms",
+              }}
             >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
-            </select>
-          </div>
-        )}
-
-        {/* Posts */}
-        <div className="space-y-4">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : filteredPosts.length > 0 ? (
-            filteredPosts.map(post => <PostCard key={post.id} post={post} />)
-          ) : (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="text-center py-8">
-                  <Mail className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                  <p className="text-foreground font-medium mb-2">
-                    {selectedCompany ? "No posts from this company yet" : "No posts yet"}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {user?.role === "admin"
-                      ? "Click Refresh Now to pull the latest posts."
-                      : "Check back after the daily monitoring job runs at 9:00 AM UTC."}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+              {isRefreshing ? (
+                <>
+                  <svg className="spin-slow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                  Refreshing…
+                </>
+              ) : (
+                <>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                    <path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                    <path d="M8 16H3v5" />
+                  </svg>
+                  Refresh now
+                </>
+              )}
+            </button>
           )}
         </div>
       </div>
+
+      {/* ── Stats row ── */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 1,
+          marginBottom: 36,
+          border: "1px solid rgb(var(--ink-line))",
+          borderRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        {/* Total posts */}
+        <div
+          style={{
+            padding: "18px 20px",
+            background: "rgb(var(--ink-surface))",
+            borderRight: "1px solid rgb(var(--ink-line))",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "rgb(var(--ink-faint))", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>
+            Total posts
+          </div>
+          {isLoading ? (
+            <div style={{ height: 36, display: "flex", alignItems: "center" }}>
+              <svg className="spin-slow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "rgb(var(--ink-faint))" }}>
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            </div>
+          ) : (
+            <span className="font-serif" style={{ fontSize: 32, fontWeight: 600, color: "rgb(var(--ink-text))", letterSpacing: "-0.03em", lineHeight: 1 }}>
+              {posts?.length ?? 0}
+            </span>
+          )}
+        </div>
+
+        {/* Last updated */}
+        <div
+          style={{
+            padding: "18px 20px",
+            background: "rgb(var(--ink-surface))",
+            borderRight: "1px solid rgb(var(--ink-line))",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "rgb(var(--ink-faint))", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>
+            Last updated
+          </div>
+          <span className="font-serif" style={{ fontSize: 20, fontWeight: 500, color: "rgb(var(--ink-text))", letterSpacing: "-0.02em", lineHeight: 1 }}>
+            {lastFetched ?? "Never"}
+          </span>
+        </div>
+
+        {/* Monitoring */}
+        <div
+          style={{
+            padding: "18px 20px",
+            background: "rgb(var(--ink-surface))",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "rgb(var(--ink-faint))", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>
+            Monitoring
+          </div>
+          <div className="flex items-center gap-2" style={{ marginTop: 4 }}>
+            <span className="relative inline-flex">
+              <span className="w-2 h-2 rounded-full bg-green-500/90" />
+              <span className="absolute inset-0 w-2 h-2 rounded-full bg-green-500/40 animate-ping" />
+            </span>
+            <span style={{ fontSize: 13, color: "rgb(var(--ink-text))", fontWeight: 500 }}>Active</span>
+          </div>
+          <div className="font-mono" style={{ fontSize: 11, color: "rgb(var(--ink-faint))", marginTop: 4 }}>
+            Daily · 9:00 UTC
+          </div>
+        </div>
+      </div>
+
+      {/* ── Filters ── */}
+      {!isLoading && posts && posts.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: 24 }}>
+          <FilterChip
+            label="All"
+            active={selectedCompany === null}
+            onClick={() => setSelectedCompany(null)}
+          />
+          {companies.map(c => (
+            <FilterChip
+              key={c.id}
+              label={c.name}
+              active={selectedCompany === c.id}
+              onClick={() => setSelectedCompany(selectedCompany === c.id ? null : c.id)}
+            />
+          ))}
+
+          {/* Sort pill */}
+          <div
+            className="flex items-center gap-0.5 ml-auto"
+            style={{
+              border: "1px solid rgb(var(--ink-line))",
+              borderRadius: 9999,
+              padding: "3px 4px",
+              background: "rgb(var(--ink-hair))",
+              gap: 2,
+            }}
+          >
+            {(["newest", "oldest"] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => setSortOrder(s)}
+                className="focus-ring"
+                style={{
+                  padding: "3px 10px",
+                  borderRadius: 9999,
+                  fontSize: 11.5,
+                  fontWeight: 500,
+                  letterSpacing: "-0.01em",
+                  border: "none",
+                  background: sortOrder === s ? "rgb(var(--ink-bg))" : "transparent",
+                  color: sortOrder === s ? "rgb(var(--ink-text))" : "rgb(var(--ink-faint))",
+                  cursor: "pointer",
+                  transition: "background 150ms, color 150ms",
+                  textTransform: "capitalize",
+                }}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Feed ── */}
+      {isLoading ? (
+        <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}>
+          <svg className="spin-slow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "rgb(var(--ink-faint))" }}>
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+        </div>
+      ) : filteredPosts.length > 0 ? (
+        <div>
+          {filteredPosts.map(post => <PostCard key={post.id} post={post} />)}
+        </div>
+      ) : (
+        <div style={{ textAlign: "center", paddingTop: 72, paddingBottom: 72 }}>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ color: "rgb(var(--ink-line))", margin: "0 auto 16px" }}>
+            <path d="M22 13h-6l-2 3h-4l-2-3H2" />
+            <path d="M5.45 4.84 2 13v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-8.16A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.85.84Z" />
+          </svg>
+          <p style={{ fontSize: 15, fontWeight: 600, color: "rgb(var(--ink-text))", marginBottom: 6 }}>
+            {selectedCompany ? "No posts from this company" : "No posts yet"}
+          </p>
+          <p style={{ fontSize: 13, color: "rgb(var(--ink-muted))" }}>
+            {user?.role === "admin"
+              ? "Click Refresh now to pull the latest posts."
+              : "Check back after the daily monitoring job runs at 9:00 UTC."}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

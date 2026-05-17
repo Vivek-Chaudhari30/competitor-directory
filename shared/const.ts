@@ -89,16 +89,6 @@ export const COMPETITORS: Company[] = [
     twitter: "https://x.com/gethockeystack",
   },
   {
-    id: "attio",
-    name: "Attio",
-    category: "gtm-sales",
-    description: "AI CRM that builds pipeline, accelerates deals, and compounds revenue. Data-driven and fully programmable.",
-    location: "San Francisco, CA",
-    website: "https://attio.com/",
-    linkedin: "https://www.linkedin.com/company/attio",
-    twitter: "https://x.com/attio",
-  },
-  {
     id: "sentra",
     name: "Sentra",
     category: "a16z",

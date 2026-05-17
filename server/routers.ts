@@ -8,8 +8,14 @@ import {
   getCompanies, addCompany, updateCompany, deleteCompany,
   getPeople, addPerson, updatePerson, deletePerson,
   updateUserSettings,
+  getAiReports,
+  getAiReportById,
+  getLatestAiReport,
+  getPostsByReportId,
 } from "./db";
 import { runCompetitorMonitoringJob } from "./services/competitorMonitoring";
+import { runDailyAiReportJob } from "./services/aiReportService";
+import { dailyReportOutputSchema } from "../shared/reportTypes";
 
 export const appRouter = router({
   system: systemRouter,
@@ -135,6 +141,62 @@ export const appRouter = router({
       return { success: true, message: "Monitoring job started" };
     }),
   }),
+
+  reports: router({
+    list: protectedProcedure
+      .input(z.object({
+        limit: z.number().min(1).max(100).default(30),
+        offset: z.number().min(0).default(0),
+      }).optional())
+      .query(async ({ input }) => {
+        const limit = input?.limit ?? 30;
+        const offset = input?.offset ?? 0;
+        const reports = await getAiReports(limit, offset);
+        return reports.map((r) => ({
+          ...r,
+          summaryJson: r.summaryJson ? safeParseSummaryJson(r.summaryJson) : null,
+        }));
+      }),
+
+    getById: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const report = await getAiReportById(input.id);
+        if (!report) return null;
+        const posts = await getPostsByReportId(input.id);
+        return {
+          ...report,
+          summaryJson: report.summaryJson ? safeParseSummaryJson(report.summaryJson) : null,
+          posts,
+        };
+      }),
+
+    getLatest: protectedProcedure.query(async () => {
+      const report = await getLatestAiReport();
+      if (!report) return null;
+      const posts = report.id ? await getPostsByReportId(report.id) : [];
+      return {
+        ...report,
+        summaryJson: report.summaryJson ? safeParseSummaryJson(report.summaryJson) : null,
+        posts,
+      };
+    }),
+
+    runNow: protectedProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user?.role !== "admin") throw new Error("Only admins can trigger AI report generation");
+      return runDailyAiReportJob();
+    }),
+  }),
 });
+
+function safeParseSummaryJson(raw: string) {
+  try {
+    const parsed = JSON.parse(raw);
+    const result = dailyReportOutputSchema.safeParse(parsed);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
 
 export type AppRouter = typeof appRouter;

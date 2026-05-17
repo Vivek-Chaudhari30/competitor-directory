@@ -17,6 +17,14 @@ const Inbox = ({ size = 16, strokeWidth = 1.6, className = "" }: IconProps) => (
     <path d="M5.45 4.84 2 13v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-8.16A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.85.84Z" />
   </svg>
 );
+const FileText = ({ size = 16, strokeWidth = 1.6, className = "" }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+    <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    <path d="M10 13h4" /><path d="M10 17h4" /><path d="M10 9h1" />
+  </svg>
+);
 const SettingsIcon = ({ size = 16, strokeWidth = 1.6, className = "" }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
     strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
@@ -80,10 +88,19 @@ function Avatar({ name, size = 28 }: { name: string; size?: number }) {
   );
 }
 
+async function devLogin() {
+  const res = await fetch("/api/auth/dev-login", { method: "POST", credentials: "include" });
+  if (!res.ok) throw new Error("Dev login failed");
+  window.location.href = "/";
+}
+
+const USE_DEV_LOGIN = import.meta.env.DEV;
+
 // ── Nav items ───────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
   { path: "/",         label: "Directory", Icon: Home },
   { path: "/updates",  label: "Updates",   Icon: Inbox },
+  { path: "/reports",  label: "Reports",   Icon: FileText },
   { path: "/settings", label: "Settings",  Icon: SettingsIcon },
 ];
 
@@ -270,8 +287,36 @@ export function Sidebar({ collapsed, onToggleCollapse, theme, onToggleTheme }: S
               </>
             )}
           </div>
+        ) : USE_DEV_LOGIN ? (
+          collapsed ? (
+            <button
+              type="button"
+              onClick={() => devLogin().catch(console.error)}
+              className="w-9 h-9 mx-auto rounded-[7px] flex items-center justify-center focus-ring transition-colors cursor-pointer"
+              style={{ color: "rgb(var(--ink-muted))", border: "1px solid rgb(var(--ink-line))", background: "transparent" }}
+              title="Dev login"
+              aria-label="Dev login"
+            >
+              D
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => devLogin().catch(console.error)}
+              className="flex items-center gap-2.5 h-9 px-3 rounded-[7px] transition-colors focus-ring w-full cursor-pointer"
+              style={{
+                border: "1px solid rgb(var(--ink-accent))",
+                color: "rgb(var(--ink-accent))",
+                background: "transparent",
+                fontSize: 13,
+                fontWeight: 500,
+                letterSpacing: "-0.01em",
+              }}
+            >
+              Dev login (local)
+            </button>
+          )
         ) : (
-          /* Not logged in — show GitHub sign-in */
           collapsed ? (
             <a
               href="/api/auth/github"
@@ -280,7 +325,6 @@ export function Sidebar({ collapsed, onToggleCollapse, theme, onToggleTheme }: S
               title="Sign in with GitHub"
               aria-label="Sign in with GitHub"
             >
-              {/* GitHub icon */}
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                 <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z" />
               </svg>

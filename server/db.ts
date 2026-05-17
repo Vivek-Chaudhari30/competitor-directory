@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser, users,
@@ -7,6 +7,8 @@ import {
   taskLogs, TaskLog, InsertTaskLog,
   companies, Company, InsertCompany,
   people, Person, InsertPerson,
+  aiDailyReports, AiDailyReport, InsertAiDailyReport,
+  aiReportPosts, InsertAiReportPost,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -105,6 +107,38 @@ export async function runMigrations(): Promise<void> {
     await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN likeCount int DEFAULT NULL`);
     await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN commentCount int DEFAULT NULL`);
     await runSql(db, `ALTER TABLE competitor_posts ADD COLUMN shareCount int DEFAULT NULL`);
+
+    // ── 0003: AI daily reports
+    await runSql(db, `
+      CREATE TABLE IF NOT EXISTS ai_daily_reports (
+        id int AUTO_INCREMENT NOT NULL,
+        reportDate date NOT NULL,
+        status enum('pending','generating','success','failed','skipped') NOT NULL,
+        postCount int NOT NULL DEFAULT 0,
+        summaryMarkdown text,
+        summaryJson text,
+        model varchar(64),
+        promptTokens int,
+        completionTokens int,
+        error text,
+        generatedAt timestamp,
+        createdAt timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT ai_daily_reports_id PRIMARY KEY (id)
+      )
+    `);
+    await runSql(db, `
+      CREATE TABLE IF NOT EXISTS ai_report_posts (
+        id int AUTO_INCREMENT NOT NULL,
+        reportId int NOT NULL,
+        postId int NOT NULL,
+        createdAt timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT ai_report_posts_id PRIMARY KEY (id),
+        CONSTRAINT ai_report_posts_report_post_unique UNIQUE (reportId, postId)
+      )
+    `);
+
+    // Remove Attio from dataset (hard delete company + posts)
+    await purgeCompanyCompletely("attio");
 
     console.log("[Migrations] ✓ All migrations applied");
   } catch (error) {
@@ -211,6 +245,33 @@ export async function deleteCompany(id: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.update(companies).set({ isActive: false }).where(eq(companies.id, id));
+}
+
+/** Hard-delete a company and all related posts, notifications, and report links. */
+export async function purgeCompanyCompletely(companyId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  try {
+    const posts = await db
+      .select({ id: competitorPosts.id })
+      .from(competitorPosts)
+      .where(eq(competitorPosts.companyId, companyId));
+
+    const postIds = posts.map((p) => p.id);
+
+    if (postIds.length > 0) {
+      await db.delete(aiReportPosts).where(inArray(aiReportPosts.postId, postIds));
+      await db.delete(notifications).where(inArray(notifications.postId, postIds));
+    }
+
+    await db.delete(competitorPosts).where(eq(competitorPosts.companyId, companyId));
+    await db.delete(companies).where(eq(companies.id, companyId));
+
+    console.log(`[Database] Purged company "${companyId}" (${postIds.length} posts removed)`);
+  } catch (error) {
+    console.error(`[Database] Failed to purge company "${companyId}":`, error);
+  }
 }
 
 export async function seedCompaniesIfEmpty(seedData: InsertCompany[]): Promise<void> {
@@ -365,3 +426,174 @@ export async function updateTaskLog(taskLogId: number, updates: Partial<TaskLog>
     console.error("[Database] Failed to update task log:", error);
   }
 }
+
+// ─── AI daily reports ─────────────────────────────────────────────────────────
+
+function utcReportDateString(d = new Date()): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function parseReportDate(dateStr: string): Date {
+  return new Date(`${dateStr}T12:00:00.000Z`);
+}
+
+function utcReportDate(d = new Date()): Date {
+  return parseReportDate(utcReportDateString(d));
+}
+
+export async function getPostsNotInAnyReport(limit = 50): Promise<CompetitorPost[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  try {
+    const rows = await db
+      .select({ post: competitorPosts })
+      .from(competitorPosts)
+      .leftJoin(aiReportPosts, eq(competitorPosts.id, aiReportPosts.postId))
+      .where(isNull(aiReportPosts.postId))
+      .orderBy(desc(competitorPosts.postedAt))
+      .limit(limit);
+
+    return rows.map((r) => r.post);
+  } catch (error) {
+    console.error("[Database] Failed to get unreported posts:", error);
+    return [];
+  }
+}
+
+export async function createAiReport(data: InsertAiDailyReport): Promise<AiDailyReport | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  try {
+    const result = await db.insert(aiDailyReports).values(data);
+    const inserted = await db
+      .select()
+      .from(aiDailyReports)
+      .where(eq(aiDailyReports.id, Number(result[0].insertId)))
+      .limit(1);
+    return inserted[0] ?? null;
+  } catch (error) {
+    console.error("[Database] Failed to create AI report:", error);
+    return null;
+  }
+}
+
+export async function updateAiReport(reportId: number, updates: Partial<AiDailyReport>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  try {
+    await db.update(aiDailyReports).set(updates).where(eq(aiDailyReports.id, reportId));
+  } catch (error) {
+    console.error("[Database] Failed to update AI report:", error);
+  }
+}
+
+export async function linkReportPosts(reportId: number, postIds: number[]): Promise<void> {
+  const db = await getDb();
+  if (!db || postIds.length === 0) return;
+
+  const rows: InsertAiReportPost[] = postIds.map((postId) => ({ reportId, postId }));
+
+  try {
+    for (const row of rows) {
+      try {
+        await db.insert(aiReportPosts).values(row);
+      } catch (error: any) {
+        if (error?.code === "ER_DUP_ENTRY" || error?.message?.includes("Duplicate entry")) continue;
+        throw error;
+      }
+    }
+  } catch (error) {
+    console.error("[Database] Failed to link report posts:", error);
+  }
+}
+
+export async function getAiReports(limit = 30, offset = 0): Promise<AiDailyReport[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  try {
+    return await db
+      .select()
+      .from(aiDailyReports)
+      .orderBy(desc(aiDailyReports.reportDate), desc(aiDailyReports.id))
+      .limit(limit)
+      .offset(offset);
+  } catch (error) {
+    console.error("[Database] Failed to list AI reports:", error);
+    return [];
+  }
+}
+
+export async function getAiReportById(reportId: number): Promise<AiDailyReport | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  try {
+    const rows = await db.select().from(aiDailyReports).where(eq(aiDailyReports.id, reportId)).limit(1);
+    return rows[0] ?? null;
+  } catch (error) {
+    console.error("[Database] Failed to get AI report:", error);
+    return null;
+  }
+}
+
+export async function getLatestAiReport(): Promise<AiDailyReport | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  try {
+    const rows = await db
+      .select()
+      .from(aiDailyReports)
+      .orderBy(desc(aiDailyReports.reportDate), desc(aiDailyReports.id))
+      .limit(1);
+    return rows[0] ?? null;
+  } catch (error) {
+    console.error("[Database] Failed to get latest AI report:", error);
+    return null;
+  }
+}
+
+export async function getAiReportForDate(reportDate: string | Date): Promise<AiDailyReport | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  const dateValue = typeof reportDate === "string" ? parseReportDate(reportDate) : reportDate;
+
+  try {
+    const rows = await db
+      .select()
+      .from(aiDailyReports)
+      .where(eq(aiDailyReports.reportDate, dateValue))
+      .orderBy(desc(aiDailyReports.id))
+      .limit(1);
+    return rows[0] ?? null;
+  } catch (error) {
+    console.error("[Database] Failed to get AI report for date:", error);
+    return null;
+  }
+}
+
+export async function getPostsByReportId(reportId: number): Promise<CompetitorPost[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  try {
+    const rows = await db
+      .select({ post: competitorPosts })
+      .from(aiReportPosts)
+      .innerJoin(competitorPosts, eq(aiReportPosts.postId, competitorPosts.id))
+      .where(eq(aiReportPosts.reportId, reportId))
+      .orderBy(desc(competitorPosts.postedAt));
+
+    return rows.map((r) => r.post);
+  } catch (error) {
+    console.error("[Database] Failed to get posts for report:", error);
+    return [];
+  }
+}
+
+export { utcReportDateString, utcReportDate, parseReportDate };

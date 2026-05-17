@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Competitor Directory is a full-stack application that monitors your competitors' social media activity and sends you daily email updates. It tracks 7 competitors across LinkedIn and Twitter, automatically fetching new posts every day at 9:00 AM UTC.
+The Competitor Directory is a full-stack application that monitors your competitors' social media activity and sends you daily email updates. It tracks 6 competitors across LinkedIn and Twitter, automatically fetching new posts every day at 9:00 AM UTC.
 
 ## System Architecture
 
@@ -60,15 +60,31 @@ The Competitor Directory is a full-stack application that monitors your competit
 - Handler: `scheduledCompetitorMonitoringHandler`
 
 When triggered, the scheduler:
-1. Authenticates as a cron task
-2. Calls `runCompetitorMonitoringJob()`
-3. Returns success/error response
-4. Logs execution in task_logs table
+1. Authenticates as a cron task (GitHub Actions bearer or Manus cron JWT)
+2. Calls `runCompetitorMonitoringJob()` (Apify → `competitor_posts`)
+3. Calls `runDailyAiReportJob()` (OpenAI → `ai_daily_reports`) — failures are logged but do not fail the scrape
+4. Returns success/error response with `aiReport` status
+5. Logs execution in `task_logs` table
+
+### AI Daily Reports
+
+**Tables:** `ai_daily_reports`, `ai_report_posts` (junction for idempotency)
+
+**Services:**
+- `server/services/openaiService.ts` — OpenAI API (`OPENAI_API_KEY`)
+- `server/services/aiReportService.ts` — `runDailyAiReportJob()` summarizes only posts not yet in any report
+
+**Environment variables:**
+- `OPENAI_API_KEY` — required for report generation
+- `OPENAI_MODEL` — default `gpt-4o-mini`
+- `AI_REPORT_ENABLED` — set `false` to skip AI step
+
+**Frontend:** `/reports` — archive of daily AI summaries (auth required)
 
 ### Frontend Pages
 
 **Home (/)** - Competitor Directory
-- Searchable list of 7 competitors
+- Searchable list of 6 competitors
 - Filter by category (AI & Context, GTM/Sales, a16z)
 - View company details, founders, and social profiles
 - Direct links to LinkedIn and Twitter
@@ -78,6 +94,11 @@ When triggered, the scheduler:
 - Shows post content, author, and platform
 - Direct links to original posts
 - "Refresh Now" button to manually trigger monitoring
+
+**Reports (/reports)** - AI-Generated Daily Summaries
+- Executive summary, highlights by company/person, themes
+- Archive of past reports
+- Admin "Generate report" triggers `runDailyAiReportJob()` manually
 - Stats: Total posts, last updated, monitoring status
 
 **Settings (/settings)** - Notification Preferences
@@ -123,7 +144,7 @@ When triggered, the scheduler:
 ### User Workflow
 
 1. **Sign In** - User authenticates via Manus OAuth
-2. **View Directory** - Browse all 7 competitors on home page
+2. **View Directory** - Browse all 6 competitors on home page
 3. **Check Updates** - Visit Updates page to see latest posts
 4. **Manage Settings** - Configure notification preferences
 5. **Receive Emails** - Daily email at 9:00 AM UTC with new posts
@@ -136,7 +157,6 @@ When triggered, the scheduler:
 | Contextual AI | AI & Context | Douwe Kiela | Mountain View, CA |
 | Context AI | AI & Context | Joseph Semrai | San Francisco, CA |
 | Hockeystack | GTM / Sales | - | San Francisco, CA |
-| Attio | GTM / Sales | - | San Francisco, CA |
 | Sentra | a16z Speedrun | Ashwin Gopinath, Andrey Starenky | San Francisco, CA |
 | Meridian | a16z Speedrun | Kashyap Nathan, Chris Farrington | San Francisco, CA |
 

@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { runCompetitorMonitoringJob } from "../services/competitorMonitoring";
+import { runDailyAiReportJob } from "../services/aiReportService";
 import { sdk } from "../_core/sdk";
 import { ENV } from "../_core/env";
 
@@ -37,10 +38,22 @@ export async function scheduledCompetitorMonitoringHandler(req: Request, res: Re
 
     await runCompetitorMonitoringJob();
 
+    let aiReport: Awaited<ReturnType<typeof runDailyAiReportJob>> | undefined;
+    try {
+      aiReport = await runDailyAiReportJob();
+    } catch (aiError) {
+      console.error("[Scheduled Handler] AI report failed:", aiError);
+      aiReport = {
+        status: "failed",
+        error: aiError instanceof Error ? aiError.message : String(aiError),
+      };
+    }
+
     res.json({
       ok: true,
       message: "Competitor monitoring job completed successfully",
       taskUid,
+      aiReport,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

@@ -14,4 +14,8 @@ export const ENV = {
   cronSecret: process.env.CRON_SECRET ?? "",
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   appUrl: process.env.APP_URL ?? "https://competitor-directory-production.up.railway.app",
+  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+  openaiMaxTokens: Number(process.env.OPENAI_MAX_TOKENS ?? "4096"),
+  aiReportEnabled: process.env.AI_REPORT_ENABLED !== "false",
 };

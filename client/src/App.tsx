@@ -5,6 +5,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
 import Home from "./pages/Home";
 import Updates from "./pages/Updates";
+import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import { useState, useEffect } from "react";
 
@@ -13,6 +14,7 @@ function Router() {
     <Switch>
       <Route path="/"         component={Home} />
       <Route path="/updates"  component={Updates} />
+      <Route path="/reports"  component={Reports} />
       <Route path="/settings" component={Settings} />
       <Route path="/404"      component={NotFound} />
       <Route                  component={NotFound} />

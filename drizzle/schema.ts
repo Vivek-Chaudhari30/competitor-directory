@@ -1,4 +1,4 @@
-import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { boolean, date, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -116,3 +116,38 @@ export const taskLogs = mysqlTable("task_logs", {
 
 export type TaskLog = typeof taskLogs.$inferSelect;
 export type InsertTaskLog = typeof taskLogs.$inferInsert;
+
+// ─── AI daily reports ─────────────────────────────────────────────────────────
+export const aiDailyReports = mysqlTable("ai_daily_reports", {
+  id: int("id").autoincrement().primaryKey(),
+  reportDate: date("reportDate").notNull(),
+  status: mysqlEnum("status", ["pending", "generating", "success", "failed", "skipped"]).notNull(),
+  postCount: int("postCount").default(0).notNull(),
+  summaryMarkdown: text("summaryMarkdown"),
+  summaryJson: text("summaryJson"),
+  model: varchar("model", { length: 64 }),
+  promptTokens: int("promptTokens"),
+  completionTokens: int("completionTokens"),
+  error: text("error"),
+  generatedAt: timestamp("generatedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AiDailyReport = typeof aiDailyReports.$inferSelect;
+export type InsertAiDailyReport = typeof aiDailyReports.$inferInsert;
+
+export const aiReportPosts = mysqlTable(
+  "ai_report_posts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    reportId: int("reportId").notNull(),
+    postId: int("postId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    reportPostUnique: uniqueIndex("ai_report_posts_report_post_unique").on(table.reportId, table.postId),
+  }),
+);
+
+export type AiReportPost = typeof aiReportPosts.$inferSelect;
+export type InsertAiReportPost = typeof aiReportPosts.$inferInsert;

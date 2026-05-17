@@ -1,6 +1,6 @@
 import axios from "axios";
 import { getCompanies, getPeople, addCompetitorPost, createTaskLog, updateTaskLog, getUsersWithEmailEnabled } from "../db";
-import { sendDailyDigestEmail } from "./emailService";
+import { sendDailyDigestEmailsBatch } from "./emailService";
 import { ENV } from "../_core/env";
 import type { Company, Person } from "../../drizzle/schema";
 
@@ -214,15 +214,14 @@ export async function runCompetitorMonitoringJob() {
 
     if (postsAdded > 0) {
       const subscribers = await getUsersWithEmailEnabled();
+      const validSubscribers = subscribers.filter(s => !!s.email);
       let emailsSentCount = 0;
 
-      for (const subscriber of subscribers) {
-        if (!subscriber.email) continue;
-        const sent = await sendDailyDigestEmail(subscriber.email, subscriber.name ?? "", allPosts as any);
-        if (sent) emailsSentCount++;
+      if (validSubscribers.length > 0) {
+        emailsSentCount = await sendDailyDigestEmailsBatch(validSubscribers, allPosts as any);
       }
 
-      console.log(`[${taskName}] Sent digest emails to ${emailsSentCount}/${subscribers.length} subscribers`);
+      console.log(`[${taskName}] Sent digest emails to ${emailsSentCount}/${validSubscribers.length} valid subscribers`);
     }
 
     if (taskLog) {
